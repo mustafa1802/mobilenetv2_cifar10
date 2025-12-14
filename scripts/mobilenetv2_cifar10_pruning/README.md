@@ -3,6 +3,6 @@ The following scripts provide the infrastructure to take a FP32 model, perform i
 
 # Steps to Reproduce 
 
-`pip install -f requirements.txt`
+`pip install -r requirements.txt`
 
 `python main.py`
