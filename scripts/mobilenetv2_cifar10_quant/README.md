@@ -1,7 +1,7 @@
 # Quantization Infrastructure
 
 ## Usage 
-`pip install -f requirements.txt`
+`pip install -r requirements.txt`
 
 ## Basic QAT training (4-bit weights, 8-bit activations, no W&B)
 ```
