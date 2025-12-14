@@ -1,7 +1,7 @@
 # Baseline Training Script
 
 ```
-pip install -f requirements.txt
+pip install -r requirements.txt
 ```
 
 ```
