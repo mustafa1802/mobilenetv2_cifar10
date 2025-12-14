@@ -1,7 +1,9 @@
 import argparse
 import os
 import time
+import random
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -13,10 +15,6 @@ from torchvision.models import mobilenet_v2, MobileNet_V2_Weights
 # ---------------------------------
 # Reproducibility Configuration
 # ---------------------------------
-import torch
-import numpy as np
-import random
-import os
 
 
 def set_seed(seed=42):
@@ -57,8 +55,6 @@ def create_mobilenetv2_cifar10(num_classes=10, pretrained=True):
     in_features = model.classifier[1].in_features
     model.classifier[1] = nn.Linear(in_features, num_classes)
 
-    # Optionally, adjust the first conv if needed; CIFAR-10 is 3x32x32 already,
-    # so we keep the default (3-channel input) but note the smaller resolution.
     return model
 
 
@@ -67,7 +63,7 @@ def get_cifar10_loaders(data_dir="./data", batch_size=128, num_workers=4):
     Returns train and test DataLoaders for CIFAR-10.
     Applies standard augmentation on the training set.
     """
-    # Normalization values for CIFAR-10 (approx or standard ImageNet-like)
+    # Normalization values for CIFAR-10
     mean = (0.4914, 0.4822, 0.4465)
     std = (0.2470, 0.2435, 0.2616)
 
@@ -119,6 +115,10 @@ def plot_curves(history, out_prefix="mobilenetv2_cifar10"):
     `history` is expected to be a dict with keys:
       - train_loss, val_loss, train_acc, val_acc
     """
+    if len(history["train_loss"]) == 0:
+        print("History is empty, skipping plots.")
+        return
+
     epochs = range(len(history["train_loss"]))
 
     # Loss curves
@@ -256,29 +256,77 @@ def evaluate(model, criterion, dataloader, device, epoch="TEST"):
 
 
 class Config:
-    data_dir = "./data"           # For Colab, use "/content/data"
-    epochs = 30
-    batch_size = 128
-    lr = 0.05
-    weight_decay = 4e-5
-    num_workers = 4
-    label_smoothing = 0.1
-    no_pretrained = False         # Set True to disable ImageNet pretraining
-    save_path = "mobilenetv2_cifar10_best.pth"
-    resume = ""                   # Path to checkpoint, or "" to start fresh
-    mixed_precision = False       # Use AMP if GPU is available
+    pass
 
 
-def main():
-    # Reproducibility
-    set_seed(42)
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="MobileNetV2 on CIFAR-10: train or eval"
+    )
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="train",
+        choices=["train", "eval"],
+        help="Run mode: train or eval (default: train)",
+    )
+    parser.add_argument("--data-dir", type=str, default="./data")
+    parser.add_argument("--epochs", type=int, default=30)
+    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--lr", type=float, default=0.05)
+    parser.add_argument("--weight-decay", type=float, default=4e-5)
+    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--label-smoothing", type=float, default=0.1)
+    parser.add_argument(
+        "--no-pretrained",
+        action="store_true",
+        help="Disable ImageNet pretraining",
+    )
+    parser.add_argument(
+        "--save-path",
+        type=str,
+        default="mobilenetv2_cifar10_best.pth",
+        help="Path to save best checkpoint",
+    )
+    parser.add_argument(
+        "--resume",
+        type=str,
+        default="",
+        help="Path to checkpoint to resume/eval",
+    )
+    parser.add_argument(
+        "--mixed-precision",
+        action="store_true",
+        help="Use AMP if GPU is available",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed",
+    )
+    return parser.parse_args()
 
+
+def build_config_from_args(args):
     cfg = Config()
-    print("Config:", vars(cfg))
+    cfg.data_dir = args.data_dir
+    cfg.epochs = args.epochs
+    cfg.batch_size = args.batch_size
+    cfg.lr = args.lr
+    cfg.weight_decay = args.weight_decay
+    cfg.num_workers = args.num_workers
+    cfg.label_smoothing = args.label_smoothing
+    cfg.no_pretrained = args.no_pretrained
+    cfg.save_path = args.save_path
+    cfg.resume = args.resume
+    cfg.mixed_precision = args.mixed_precision
+    cfg.seed = args.seed
+    cfg.mode = args.mode
+    return cfg
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Using device: {device}")
 
+def run_train(cfg, device):
     # Data
     trainloader, testloader = get_cifar10_loaders(
         data_dir=cfg.data_dir,
@@ -373,9 +421,59 @@ def main():
 
     # Curves
     plot_curves(history, out_prefix="mobilenetv2_cifar10")
-    print("Saved loss/accuracy curves to:")
-    print(" mobilenetv2_cifar10_loss.png")
-    print(" mobilenetv2_cifar10_accuracy.png")
+
+
+def run_eval(cfg, device):
+    print("Running in EVAL mode only.")
+
+    # Only need test loader
+    _, testloader = get_cifar10_loaders(
+        data_dir=cfg.data_dir,
+        batch_size=cfg.batch_size,
+        num_workers=cfg.num_workers,
+    )
+
+    # Model
+    model = create_mobilenetv2_cifar10(
+        num_classes=10,
+        pretrained=not cfg.no_pretrained,
+    )
+    model = model.to(device)
+
+    # Determine which checkpoint to load
+    ckpt_path = cfg.resume if cfg.resume else cfg.save_path
+    if not ckpt_path or not os.path.isfile(ckpt_path):
+        raise FileNotFoundError(
+            f"No valid checkpoint found. "
+            f"Provide --resume PATH or ensure {cfg.save_path} exists."
+        )
+
+    print(f"Loading checkpoint for eval from {ckpt_path}")
+    checkpoint = torch.load(ckpt_path, map_location=device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+
+    # For eval, label smoothing typically 0 (but it's only for loss reporting)
+    criterion = nn.CrossEntropyLoss(label_smoothing=0.0)
+
+    loss, acc1 = evaluate(model, criterion, testloader, device, epoch="EVAL")
+    print(f"Final EVAL - Loss: {loss:.4f} | Top-1: {acc1:.2f}%")
+
+
+def main():
+    args = parse_args()
+    cfg = build_config_from_args(args)
+
+    # Reproducibility
+    set_seed(cfg.seed)
+
+    print("Config:", vars(cfg))
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Using device: {device}")
+
+    if cfg.mode == "train":
+        run_train(cfg, device)
+    else:  # "eval"
+        run_eval(cfg, device)
 
 
 if __name__ == "__main__":
